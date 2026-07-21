@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install
+        run: uv sync
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Typecheck
+        run: uv run mypy src/impronta
+      - name: Test (hermetic default tier)
+        run: uv run pytest --cov --cov-report=term

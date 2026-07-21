@@ -1,0 +1,25 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, monday 06:17 UTC
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Cache ECAPA model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/impronta
+          key: ecapa-model-v1
+      - name: Install
+        run: uv sync
+      - name: Integration tests (real ECAPA)
+        run: uv run pytest -m integration -p no:cacheprovider
