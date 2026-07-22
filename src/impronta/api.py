@@ -35,6 +35,7 @@ from .models import (
     EnrollResult,
     IdentifyResult,
     ParsedTranscript,
+    ReinforcementProposal,
     SearchFilter,
     Segment,
     SegmentInfo,
@@ -305,6 +306,159 @@ class Impronta:
             self.store.add(namespace, entries)
             self._enforce_speaker_cap(namespace, key)
             committed.append(key)
+        return committed
+
+    # ------------------------------------------------------------------
+    # Profile reinforcement
+    # ------------------------------------------------------------------
+
+    #: Reinforcement segments this similar to an already-stored entry add no
+    #: information (channel/condition diversity is the point of reinforcing).
+    NOVELTY_CEILING = 0.95
+
+    def propose_reinforcements(
+        self,
+        scribe_response: object,
+        audio: AudioInput,
+        *,
+        language_filter: bool = True,
+    ) -> list[ReinforcementProposal]:
+        """Propose strengthening profiles from confident identifications.
+
+        READ-ONLY, like ``identify``. A speaker's segments are proposed only
+        when ALL gates hold:
+
+        - the vote winner is a stored speaker with mean similarity >=
+          ``merge_threshold`` (the profile-mutating bar, not the match bar);
+        - no other stored speaker comes within ``reinforce_margin`` of the
+          winner (contested matches never feed profiles);
+        - per segment: the segment itself scores >= ``merge_threshold``
+          against the winner's entries (crosstalk stays out) and <
+          ``NOVELTY_CEILING`` against all of them (near-duplicates add
+          nothing).
+
+        Persist with :meth:`commit_reinforcements`. Note: this re-runs the
+        preparation pipeline; it is a separate pass from ``identify``.
+        """
+        cfg = self.config
+        transcripts = parse_scribe_response(scribe_response)
+        decoded = load_audio(audio, cfg.sample_rate)
+        multi = len(transcripts) > 1
+
+        proposals: list[ReinforcementProposal] = []
+        for transcript in transcripts:
+            mono = select_channel(decoded, transcript.channel_index if multi else None)
+            segment_map = segment_words(transcript.words, cfg)
+            language = cfg.canonical_language(transcript.language_code)
+            for sid in transcript.speaker_ids():
+                qid = f"{transcript.channel_index}:{sid}" if multi else sid
+                prepared = prepare_segments(
+                    segment_map.get(sid, []), mono, self.embedder, cfg
+                )
+                if prepared.embeddings is None:
+                    continue
+                outcome = run_vote(
+                    prepared.embeddings,
+                    prepared.segments,
+                    self.store,
+                    self.read_namespaces,
+                    language if language_filter else None,
+                    cfg,
+                )
+                if (
+                    outcome.winner_key == UNKNOWN_BUCKET
+                    or outcome.winner_namespace is None
+                    or outcome.mean_similarity is None
+                    or outcome.mean_similarity < cfg.merge_threshold
+                ):
+                    continue
+                rival_sims = [
+                    c.mean_similarity
+                    for c in outcome.candidates
+                    if c.speaker_key not in (outcome.winner_key, UNKNOWN_BUCKET)
+                    and c.mean_similarity is not None
+                ]
+                if rival_sims and (
+                    outcome.mean_similarity - max(rival_sims) < cfg.reinforce_margin
+                ):
+                    continue
+                stored = self.store.get_speaker_entries(
+                    outcome.winner_namespace, outcome.winner_key
+                )
+                if not stored:
+                    continue
+                profile = np.stack([e.embedding for e in stored])
+                best_vs_profile = (prepared.embeddings @ profile.T).max(axis=1)
+                keep = (best_vs_profile >= cfg.merge_threshold) & (
+                    best_vs_profile < self.NOVELTY_CEILING
+                )
+                if not keep.any():
+                    continue
+                proposals.append(
+                    ReinforcementProposal(
+                        speaker_key=outcome.winner_key,
+                        namespace=outcome.winner_namespace,
+                        display_name=outcome.winner_display_name,
+                        query_speaker_id=qid,
+                        transcription_id=transcript.transcription_id,
+                        language=language,
+                        mean_similarity=outcome.mean_similarity,
+                        embeddings=prepared.embeddings[keep],
+                        segments=tuple(
+                            SegmentInfo(
+                                start=s.start,
+                                end=s.end,
+                                confidence=s.confidence,
+                                snr_db=s.snr_db if s.snr_db is not None else 0.0,
+                            )
+                            for s, k in zip(prepared.segments, keep, strict=True)
+                            if k
+                        ),
+                    )
+                )
+        return proposals
+
+    def commit_reinforcements(
+        self, proposals: Sequence[ReinforcementProposal]
+    ) -> list[str | None]:
+        """Persist reinforcement proposals; returns the key used per proposal.
+
+        A slot is ``None`` when the target speaker no longer exists (deleted
+        or renamed since the proposal was made) — nothing is written for it.
+        Entry ids are deterministic, so committing twice is a no-op. Entries
+        take the speaker's CURRENT display name, not the proposal snapshot.
+        """
+        committed: list[str | None] = []
+        for p in proposals:
+            target = self.store.get_speaker_entries(p.namespace, p.speaker_key)
+            if not target:
+                committed.append(None)
+                continue
+            display_name = next(
+                (e.display_name for e in target if e.display_name is not None), None
+            )
+            now = utcnow()
+            entries = [
+                StoreEntry(
+                    entry_id=_det_id(
+                        "reinforce", p.transcription_id, p.query_speaker_id, i
+                    ),
+                    speaker_key=p.speaker_key,
+                    display_name=display_name,
+                    language=self.config.canonical_language(p.language),
+                    confidence=seg.confidence,
+                    embedding=np.asarray(emb, dtype=np.float32),
+                    created_at=now,
+                    source="reinforce",
+                    source_transcription_id=p.transcription_id,
+                    snr_db=seg.snr_db,
+                    duration_sec=seg.duration,
+                )
+                for i, (emb, seg) in enumerate(zip(p.embeddings, p.segments, strict=True))
+            ]
+            self.store.add(p.namespace, entries)
+            self._enforce_speaker_cap(p.namespace, p.speaker_key)
+            committed.append(p.speaker_key)
         return committed
 
     # ------------------------------------------------------------------

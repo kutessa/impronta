@@ -80,6 +80,13 @@ class ImprontaConfig:
         speaker among them is credited with their best score, so a 0.37 vs
         0.34 near-tie between two stored speakers surfaces in `candidates`
         instead of being winner-take-all.
+    reinforce_margin: profile reinforcement (``propose_reinforcements``)
+        only fires when the winner beats every other stored speaker's best
+        mean similarity by at least this margin — a contested match must
+        never feed a profile, or one wrong absorption drags the profile
+        toward the wrong voice and errors compound. (The score bar for
+        reinforcement itself is ``merge_threshold``, same as all other
+        profile-mutating decisions.)
     enroll_outlier_margin: enrollment segments whose centroid-similarity
         falls this far below the batch MEDIAN are dropped — diarization
         sometimes attributes another person's words to the labeled speaker,
@@ -144,6 +151,7 @@ class ImprontaConfig:
     gray_zone_margin: float = 0.1
     search_k: int = 8
     enroll_outlier_margin: float = 0.3
+    reinforce_margin: float = 0.15
     # unknown proposal gating
     min_proposal_segments: int = 2
     min_proposal_tier: str = "medium"

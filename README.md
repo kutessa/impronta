@@ -75,6 +75,17 @@ Safeguards baked in:
 - **Idempotency** — entry ids are deterministic in `(transcription_id, speaker_id)`; retried jobs upsert instead of duplicating.
 - **Provenance** — every embedding records its source transcription; `app.remove_transcription(tid)` surgically rolls back a bad recording or mislabel, and `app.prune_unknowns(older_than=...)` clears stale never-labeled strangers.
 
+## Profile reinforcement
+
+Profiles never grow from `identify()` — but confidently-matched audio is the best enrollment data there is. The explicit reinforcement pass harvests it safely:
+
+```python
+proposals = app.propose_reinforcements(resp, audio)   # read-only, separate pass
+app.commit_reinforcements(proposals)                  # idempotent
+```
+
+A speaker is only proposed when the match clears `merge_threshold` (0.6, the profile-mutating bar, not the 0.5 match bar), no other stored speaker comes within `reinforce_margin` (0.15) of the winner, and each harvested segment individually scores ≥ 0.6 against the profile while adding novelty (< 0.95 to every existing entry). Entries are tagged `source="reinforce"` with their transcription id, so `remove_transcription()` reverses a bad recording, and the per-speaker cap still bounds growth. Contested or weak matches never feed profiles — one wrong absorption would drag a profile toward the wrong voice and compound.
+
 ## Multi-tenancy
 
 Namespaces scope every store operation. Reads merge across a list (e.g. workspace + user); writes target one:

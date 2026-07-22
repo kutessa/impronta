@@ -217,6 +217,27 @@ def run_pipeline(audio_path: str | None, progress=gr.Progress()):  # noqa: B008 
     except ImprontaError as exc:
         log.exception("identification failed")
         raise gr.Error(f"speaker identification failed: {exc}") from exc
+
+    # strengthen profiles from confident, uncontested matches
+    reinforced_note = ""
+    try:
+        progress(0.85, desc="reinforcing matched profiles…")
+        with timed("profile reinforcement pass"):
+            reinforcements = app.propose_reinforcements(resp, audio_path)
+        committed = app.commit_reinforcements(reinforcements)
+        for p, key in zip(reinforcements, committed, strict=True):
+            if key:
+                log.info("  reinforced %s (%s) with %d segments (sim %.2f)",
+                         p.display_name or key, key, p.embeddings.shape[0],
+                         p.mean_similarity)
+        if any(committed):
+            store.save(DB_DIR)
+            reinforced_note = " · reinforced: " + ", ".join(
+                f"{p.display_name or k} +{p.embeddings.shape[0]}"
+                for p, k in zip(reinforcements, committed, strict=True) if k
+            )
+    except ImprontaError:
+        log.exception("reinforcement failed (identification result unaffected)")
     progress(1.0, desc="done")
     sids = list(result.speakers.keys())
     state = {"resp": resp, "audio_path": audio_path}
@@ -227,7 +248,7 @@ def run_pipeline(audio_path: str | None, progress=gr.Progress()):  # noqa: B008 
         gr.update(choices=sids, value=(sids[0] if sids else None)),
         state,
         speakers_table(),
-        f"transcribed ({result.language_code}), {len(sids)} speaker(s) found",
+        f"transcribed ({result.language_code}), {len(sids)} speaker(s) found{reinforced_note}",
     )
 
 

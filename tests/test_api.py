@@ -281,6 +281,113 @@ def test_enroll_triggered_unknown_merge(voices):
 
 
 # ---------------------------------------------------------------------------
+# profile reinforcement
+# ---------------------------------------------------------------------------
+
+SAME_VOICE_NEW_TAKE = 660.0  # Alice again, different channel: 0.8 sim to e0
+
+
+def reinforce_setup(voices) -> Impronta:
+    voices = dict(voices)
+    voices[SAME_VOICE_NEW_TAKE] = blend(basis(0), basis(5), 0.8)
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-enroll-alice")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    return app
+
+
+def test_reinforce_happy_path(voices):
+    app = reinforce_setup(voices)
+    resp, audio = solo_recording(SAME_VOICE_NEW_TAKE, spans=((0.0, 5.0), (6.0, 11.0)),
+                                 tid="t-new-take")
+    proposals = app.propose_reinforcements(resp, wav_bytes(audio))
+    assert len(proposals) == 1
+    p = proposals[0]
+    assert p.speaker_key == "alice"
+    assert p.mean_similarity == pytest.approx(0.8, abs=0.01)
+    assert p.embeddings.shape[0] == 2
+    before = len(app.store.get_speaker_entries("default", "alice"))
+
+    keys = app.commit_reinforcements(proposals)
+    assert keys == ["alice"]
+    entries = app.store.get_speaker_entries("default", "alice")
+    assert len(entries) == before + 2
+    assert {e.source for e in entries} == {"scribe_enroll", "reinforce"}
+
+    # idempotent: committing again changes nothing
+    app.commit_reinforcements(proposals)
+    assert len(app.store.get_speaker_entries("default", "alice")) == before + 2
+
+    # serialization round-trip survives a task queue
+    from impronta import ReinforcementProposal
+
+    assert ReinforcementProposal.from_dict(p.to_dict()) == p
+
+
+def test_reinforce_skips_weak_match(voices):
+    voices = dict(voices)
+    voices[660.0] = blend(basis(0), basis(5), 0.55)  # matches (>=0.5), weak (<0.6)
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-enroll")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    resp, audio = solo_recording(660.0, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-weak")
+    assert app.identify(resp, wav_bytes(audio)).speakers["speaker_0"].display_name == "Alice"
+    assert app.propose_reinforcements(resp, wav_bytes(audio)) == []
+
+
+def test_reinforce_skips_contested_match(voices):
+    voices = dict(voices)
+    # voice close to BOTH alice (0.75) and bob (0.65): margin 0.10 < 0.15
+    v = 0.75 * basis(0) + 0.65 * basis(1)
+    voices[660.0] = (v / np.linalg.norm(v)).astype(np.float32)
+    app = make_app(voices)
+    ra, aa = solo_recording(ALICE, tid="t-a")
+    rb, ab = solo_recording(BOB, tid="t-b")
+    app.add_speaker(ra, wav_bytes(aa), "speaker_0", "Alice")
+    app.add_speaker(rb, wav_bytes(ab), "speaker_0", "Bob")
+    resp, audio = solo_recording(660.0, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-contested")
+    assert app.propose_reinforcements(resp, wav_bytes(audio)) == []
+
+
+def test_reinforce_skips_non_novel_segments(voices):
+    """Exact-duplicate embeddings (>= novelty ceiling) add nothing."""
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-enroll")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    resp, audio = solo_recording(ALICE, spans=((0.0, 5.0),), tid="t-dup")  # identical vector
+    assert app.propose_reinforcements(resp, wav_bytes(audio)) == []
+
+
+def test_reinforce_commit_skips_deleted_speaker(voices):
+    app = reinforce_setup(voices)
+    resp, audio = solo_recording(SAME_VOICE_NEW_TAKE, spans=((0.0, 5.0),), tid="t-late")
+    proposals = app.propose_reinforcements(resp, wav_bytes(audio))
+    assert proposals
+    app.remove_speaker("alice")
+    assert app.commit_reinforcements(proposals) == [None]
+    assert app.store.count("default") == 0
+
+
+def test_reinforce_uses_current_display_name(voices):
+    app = reinforce_setup(voices)
+    resp, audio = solo_recording(SAME_VOICE_NEW_TAKE, spans=((0.0, 5.0),), tid="t-rename")
+    proposals = app.propose_reinforcements(resp, wav_bytes(audio))
+    app.label_speaker("alice", "Alice Liddell")  # renamed after proposing
+    app.commit_reinforcements(proposals)
+    reinforced = [
+        e for e in app.store.get_speaker_entries("default", "alice")
+        if e.source == "reinforce"
+    ]
+    assert reinforced and all(e.display_name == "Alice Liddell" for e in reinforced)
+
+
+def test_reinforce_never_proposes_strangers(voices):
+    app = reinforce_setup(voices)
+    resp, audio = stranger_recording(tid="t-stranger")
+    assert app.propose_reinforcements(resp, wav_bytes(audio)) == []
+
+
+# ---------------------------------------------------------------------------
 # proposal gating
 # ---------------------------------------------------------------------------
 

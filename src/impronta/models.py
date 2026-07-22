@@ -453,6 +453,60 @@ class UnknownProposal:
         return self.to_dict() == other.to_dict()
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class ReinforcementProposal:
+    """Confidently-identified segments proposed for strengthening a profile.
+
+    Produced by ``Impronta.propose_reinforcements`` (never by ``identify``),
+    persisted by ``Impronta.commit_reinforcements``. Fully serializable, and
+    deterministic in (transcription_id, query_speaker_id) so retried jobs
+    commit identical entries.
+    """
+
+    speaker_key: str
+    namespace: str
+    display_name: str | None  # snapshot; commit uses the CURRENT name
+    query_speaker_id: str
+    transcription_id: str
+    language: str
+    mean_similarity: float
+    embeddings: np.ndarray  # float32 (n, dim), L2-normalized rows
+    segments: tuple[SegmentInfo, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "speaker_key": self.speaker_key,
+            "namespace": self.namespace,
+            "display_name": self.display_name,
+            "query_speaker_id": self.query_speaker_id,
+            "transcription_id": self.transcription_id,
+            "language": self.language,
+            "mean_similarity": self.mean_similarity,
+            "embeddings": encode_embedding(self.embeddings),
+            "embedding_dim": int(self.embeddings.shape[1]),
+            "segments": [s.to_dict() for s in self.segments],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ReinforcementProposal:
+        return cls(
+            speaker_key=d["speaker_key"],
+            namespace=d["namespace"],
+            display_name=d["display_name"],
+            query_speaker_id=d["query_speaker_id"],
+            transcription_id=d["transcription_id"],
+            language=d["language"],
+            mean_similarity=d["mean_similarity"],
+            embeddings=decode_embedding(d["embeddings"], dim=d["embedding_dim"]),
+            segments=tuple(SegmentInfo.from_dict(s) for s in d["segments"]),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ReinforcementProposal):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+
 @dataclass(frozen=True, slots=True)
 class IdentifyResult:
     """Full identification outcome for one recording."""
