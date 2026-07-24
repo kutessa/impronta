@@ -71,11 +71,13 @@ class ImprontaConfig:
     --------
     similarity_threshold: minimum cosine similarity for a stored speaker to
         receive credit from a segment. Below it the segment votes "unknown".
-        Calibrated on production call recordings: genuine same-speaker
-        matches score 0.5-0.8 (with the pipeline's speech-duration rescue in
-        place), while wrong-person scores cluster at 0.3-0.45 — 0.5 rejects
-        those. Lower it (0.30-0.35) only if you observe true matches being
-        reported unknown AND can tolerate more false names.
+        Calibrated 2026-07-24 against 145 annotated production recordings
+        (grid + Optuna + chronological replay): wrong-name errors stay near
+        zero down to ~0.42, cross the 2% budget just below 0.36, and explode
+        at 0.34. 0.40 sits midway between the zero-error point and the
+        recall-optimal edge — recall ~0.38 at ~1% wrong names. Move within
+        [0.36, 0.42] to trade recall vs strictness; going below 0.36 is
+        measurably unsafe on this audio.
     search_k: neighbours fetched per segment during the vote. Each distinct
         speaker among them is credited with their best score, so a 0.37 vs
         0.34 near-tie between two stored speakers surfaces in `candidates`
@@ -141,24 +143,24 @@ class ImprontaConfig:
     gap_tolerance_sec: float = 0.5
     direct_window_sec: float = 5.0
     # filtering
-    snr_tiers: tuple[tuple[float, str], ...] = ((20.0, "high"), (15.0, "medium"), (10.0, "low"))
-    min_kept_speech_sec: float = 15.0
-    snr_floor_db: float = 3.0
-    min_segment_confidence: float = 0.5
+    snr_tiers: tuple[tuple[float, str], ...] = ((20.0, "high"), (15.0, "medium"), (12.0, "low"))
+    min_kept_speech_sec: float = 7.0
+    snr_floor_db: float = -2.0
+    min_segment_confidence: float = 0.66
     # matching
-    similarity_threshold: float = 0.5
+    similarity_threshold: float = 0.4
     merge_threshold: float = 0.6
-    gray_zone_margin: float = 0.1
-    search_k: int = 8
+    gray_zone_margin: float = 0.08
+    search_k: int = 10
     enroll_outlier_margin: float = 0.3
-    reinforce_margin: float = 0.15
+    reinforce_margin: float = 0.12
     # unknown proposal gating
-    min_proposal_segments: int = 2
+    min_proposal_segments: int = 3
     min_proposal_tier: str = "medium"
-    cohesion_threshold: float = 0.2
+    cohesion_threshold: float = 0.3
     # growth control
-    max_embeddings_per_enroll: int = 20
-    max_embeddings_per_speaker: int = 100
+    max_embeddings_per_enroll: int = 30
+    max_embeddings_per_speaker: int = 75
     merge_unknowns_on_enroll: bool = True
     # language equivalence (see DEFAULT_LANGUAGE_GROUPS)
     language_groups: tuple[tuple[str, ...], ...] = DEFAULT_LANGUAGE_GROUPS

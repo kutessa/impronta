@@ -6,7 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Data-driven default recalibration against 145 annotated production
+  recordings (grid + Optuna + chronological replay; wrong-name ≤ 2%
+  objective): `similarity_threshold` 0.5 → 0.40, `min_segment_confidence`
+  0.5 → 0.66, SNR low rung 10 → 12 dB, `snr_floor_db` 3 → −2,
+  `min_kept_speech_sec` 15 → 7, `search_k` 8 → 10, `gray_zone_margin`
+  0.1 → 0.08, `reinforce_margin` 0.15 → 0.12, `cohesion_threshold`
+  0.2 → 0.3, `min_proposal_segments` 2 → 3, `max_embeddings_per_enroll`
+  20 → 30, `max_embeddings_per_speaker` 100 → 75. Measured effect:
+  known-speaker recall 0.22 → 0.38 at ~1% wrong-name rate.
+
 ### Added
+
+- Embed-free pipeline seams for replay/tuning: `measure_segments` /
+  `select_segments` / `assemble_prepared` (pipeline) and `enroll_prepared` /
+  `identify_prepared` / `propose_reinforcements_prepared` (API). Behavior
+  unchanged; enables threshold tuning to run production code from a
+  precomputed embedding cache.
+- `import impronta` no longer loads faiss (lazy `FaissLocalStore`) — lighter
+  imports, and embedding-only processes escape the macOS faiss/torch
+  OpenMP conflict entirely.
+
+### Previous unreleased changes
 
 - Profile reinforcement: `propose_reinforcements()` / `commit_reinforcements()`
   harvest confidently-identified segments back into profiles (gated on

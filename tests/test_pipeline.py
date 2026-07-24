@@ -68,13 +68,13 @@ def test_rescue_supplements_when_tiers_starve(monkeypatch):
     prepared = prepare_segments(segments, audio, EMB, CFG)
     assert prepared.embeddings is not None
     assert prepared.quality_tier == "low"
-    assert len(prepared.segments) == 3  # 18s of speech to reach the 15s target
+    assert len(prepared.segments) == 2  # 12s of speech clears the 7s target
 
 
 def test_rescue_respects_absolute_floor(monkeypatch):
     audio = compose_timeline(14.2, [(0.0, 14.0, 440.0)])
     segments = [seg(0, 6), seg(7, 13)]
-    snr_sequence(monkeypatch, [8.0, 2.0])  # 2 dB is below snr_floor_db=3
+    snr_sequence(monkeypatch, [8.0, -5.0])  # -5 dB is below snr_floor_db=-2
     prepared = prepare_segments(segments, audio, EMB, CFG)
     assert prepared.embeddings is not None
     assert len(prepared.segments) == 1
@@ -95,8 +95,8 @@ def test_rescue_stops_at_speech_target(monkeypatch):
     segments = [seg(i * 8, i * 8 + 7) for i in range(5)]  # 5 x 7s
     snr_sequence(monkeypatch, [9.0, 8.0, 7.0, 6.0, 5.0])
     prepared = prepare_segments(segments, audio, EMB, CFG)
-    # 7 + 7 + 7 = 21s >= 15s target; the last two segments stay out
-    assert len(prepared.segments) == 3
+    # the first 7s segment alone meets the 7s target; the rest stay out
+    assert len(prepared.segments) == 1
     assert prepared.quality_tier == "low"
 
 

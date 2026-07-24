@@ -62,11 +62,11 @@ def test_first_tier_wins():
 
 def test_relaxes_to_medium_then_low():
     assert filter_by_snr([17.0, 16.0], CFG) == ([0, 1], "medium")
-    assert filter_by_snr([11.0], CFG) == ([0], "low")
+    assert filter_by_snr([13.0], CFG) == ([0], "low")
 
 
 def test_all_fail_returns_empty_and_none():
-    assert filter_by_snr([5.0, 9.9], CFG) == ([], None)
+    assert filter_by_snr([5.0, 11.9], CFG) == ([], None)
 
 
 def test_empty_input():

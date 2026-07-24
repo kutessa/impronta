@@ -143,8 +143,10 @@ def test_add_speaker_from_audio(voices):
 
 
 def stranger_recording(tid="tx-s", freq=STRANGER, language="en"):
-    # two well-separated spans -> two segments -> passes min_proposal_segments
-    return solo_recording(freq, spans=((0.0, 5.0), (6.0, 11.0)), tid=tid, language=language)
+    # three well-separated spans -> three segments -> passes min_proposal_segments
+    return solo_recording(
+        freq, spans=((0.0, 5.0), (6.0, 11.0), (12.0, 17.0)), tid=tid, language=language
+    )
 
 
 def test_stranger_is_proposed_not_written(voices):
@@ -403,11 +405,20 @@ def test_single_segment_stranger_not_proposed(voices):
 
 
 def test_low_cohesion_mixed_voices_not_proposed(voices):
+    voices = dict(voices)
+    voices[2200.0] = basis(4)  # a third stranger voice
     app = make_app(voices)
-    # one diarized speaker whose two segments are two different voices
-    duration = 11.2
-    audio = compose_timeline(duration, [(0.0, 5.0, STRANGER), (6.0, 11.0, STRANGER2)])
-    words = speech_words("speaker_0", 0.0, 5.0) + speech_words("speaker_0", 6.0, 11.0)
+    # one diarized speaker whose segments alternate between THREE voices
+    # (pairwise cohesion 1/6 ~ 0.17, below the 0.3 gate)
+    duration = 23.2
+    audio = compose_timeline(
+        duration,
+        [(0.0, 5.0, STRANGER), (6.0, 11.0, STRANGER2), (12.0, 17.0, 2200.0),
+         (18.0, 23.0, STRANGER)],
+    )
+    words = []
+    for s, e in ((0.0, 5.0), (6.0, 11.0), (12.0, 17.0), (18.0, 23.0)):
+        words.extend(speech_words("speaker_0", s, e))
     resp = make_scribe_response(words, transcription_id="tx-mixed")
     result = app.identify(resp, wav_bytes(audio))
     match = result.speakers["speaker_0"]
@@ -417,7 +428,7 @@ def test_low_cohesion_mixed_voices_not_proposed(voices):
 
 def test_gray_zone_near_named_match_not_proposed(voices):
     voices = dict(voices)
-    voices[660.0] = blend(basis(0), basis(5), 0.45)  # just under the 0.5 bar vs alice
+    voices[660.0] = blend(basis(0), basis(5), 0.36)  # in the [0.32, 0.40) gray zone vs alice
     app = make_app(voices)
     r, a = solo_recording(ALICE, tid="t-alice")
     app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")

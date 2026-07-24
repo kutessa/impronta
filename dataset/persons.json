@@ -1,0 +1,200 @@
+{
+  "tarik": {
+    "display": "Tarik",
+    "cluster": "",
+    "owner_of": [],
+    "notes": "fill cluster + owner_of during annotation"
+  },
+  "ahmed": {
+    "display": "Ahmed",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "fedja": {
+    "display": "Fedja",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "lamija": {
+    "display": "Lamija",
+    "cluster": "",
+    "owner_of": [],
+    "notes": "also appeared as typo 'lamina' (merged 2026-07-24)"
+  },
+  "bakir": {
+    "display": "Bakir",
+    "cluster": "",
+    "owner_of": [],
+    "notes": "only appearance is a mixed call (d86dd890) — excluded from scoring via quality=mixed"
+  },
+  "adrijana": {
+    "display": "Adrijana",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "aladin": {
+    "display": "Aladin",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "amor": {
+    "display": "Amor",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "andrej": {
+    "display": "Andrej",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "balvan": {
+    "display": "Balvan",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "elektroprivreda": {
+    "display": "Elektroprivreda",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "ema": {
+    "display": "Ema",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "filip": {
+    "display": "Filip",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "gabrijel": {
+    "display": "Gabrijel",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "hena": {
+    "display": "Hena",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "ibro": {
+    "display": "Ibro",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "igor": {
+    "display": "Igor",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "jan": {
+    "display": "Jan",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "kurcina": {
+    "display": "Kurcina",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "maglen": {
+    "display": "Maglen",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "nedim": {
+    "display": "Nedim",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "pimslik": {
+    "display": "Pimslik",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "piskutava": {
+    "display": "Piskutava",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "pusenje": {
+    "display": "Pusenje",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "ray": {
+    "display": "Ray",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "retard": {
+    "display": "Retard",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "sanela": {
+    "display": "Sanela",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "sara": {
+    "display": "Sara",
+    "cluster": "",
+    "owner_of": [],
+    "notes": "distinct person from 'sarah' — spelling intentional"
+  },
+  "sarah": {
+    "display": "Sarah",
+    "cluster": "",
+    "owner_of": [],
+    "notes": "distinct person from 'sara' — spelling intentional"
+  },
+  "sasa": {
+    "display": "Sasa",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "smece": {
+    "display": "Smece",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "stark": {
+    "display": "Stark",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  },
+  "tajsa": {
+    "display": "Tajsa",
+    "cluster": "",
+    "owner_of": [],
+    "notes": ""
+  }
+}

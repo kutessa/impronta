@@ -42,7 +42,7 @@ def test_one_long_strong_segment_beats_several_short_weak_ones():
 
 def test_below_threshold_segments_feed_unknown_bucket():
     store = seeded_store()
-    barely = blend(basis(0), basis(2), 0.35)  # below the 0.5 threshold
+    barely = blend(basis(0), basis(2), 0.30)  # below the 0.4 threshold
     outcome = run_vote(
         np.stack([barely, barely]), [seg(0, 2), seg(3, 5)], store, ["ns"], "en", CFG
     )
@@ -88,11 +88,11 @@ def test_language_filter_none_matches_across_languages():
 
 def test_near_misses_collected_in_gray_zone_band():
     store = seeded_store()
-    grayish = blend(basis(0), basis(2), 0.45)  # in [0.40, 0.50)
+    grayish = blend(basis(0), basis(2), 0.36)  # in [0.32, 0.40)
     outcome = run_vote(np.stack([grayish]), [seg(0, 3)], store, ["ns"], "en", CFG)
     assert outcome.winner_key == UNKNOWN_BUCKET
     assert outcome.near_misses and outcome.near_misses[0][0] == "alice"
-    assert outcome.near_misses[0][1] == pytest.approx(0.45, abs=0.01)
+    assert outcome.near_misses[0][1] == pytest.approx(0.36, abs=0.01)
 
 
 def test_segment_credits_multiple_close_speakers():

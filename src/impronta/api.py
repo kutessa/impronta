@@ -49,7 +49,6 @@ from .pipeline import PreparedSpeaker, cohesion, prepare_segments
 from .scribe import parse_scribe_response
 from .segmentation import segment_windows, segment_words
 from .store.base import VectorStore
-from .store.faiss_local import FaissLocalStore
 from .vote import run_vote
 
 
@@ -93,7 +92,13 @@ class Impronta:
         read_namespaces: Sequence[str] | None = None,
     ):
         self.config = config or ImprontaConfig()
-        self.store = store if store is not None else FaissLocalStore()
+        if store is None:
+            # lazy: keeps faiss (and its OpenMP runtime) out of processes
+            # that inject their own store
+            from .store.faiss_local import FaissLocalStore
+
+            store = FaissLocalStore()
+        self.store = store
         self._embedder = embedder
         self.write_namespace = write_namespace
         self.read_namespaces = (
@@ -131,23 +136,57 @@ class Impronta:
         transcript, segments = self._find_speaker(transcripts, speaker_id)
         mono = select_channel(decoded, transcript.channel_index if multi else None)
         prepared = prepare_segments(segments, mono, self.embedder, self.config)
+        return self.enroll_prepared(
+            prepared,
+            name=name,
+            language=transcript.language_code,
+            speaker_key=speaker_key,
+            source="scribe_enroll",
+            transcription_id=transcript.transcription_id,
+            speaker_id=speaker_id,
+        )
+
+    def enroll_prepared(
+        self,
+        prepared: PreparedSpeaker,
+        *,
+        name: str,
+        language: str,
+        speaker_key: str | None = None,
+        source: str = "scribe_enroll",
+        transcription_id: str | None = None,
+        speaker_id: str | None = None,
+    ) -> EnrollResult:
+        """Embed-free enrollment: everything after the preparation pipeline.
+
+        Used by the public enroll methods and by the tuning harness (which
+        builds ``prepared`` from a precomputed embedding cache via
+        :func:`impronta.pipeline.assemble_prepared`). Entry ids are
+        deterministic when both ``transcription_id`` and ``speaker_id`` are
+        given.
+        """
         if prepared.embeddings is None:
             raise NoUsableSegmentsError(
-                speaker_id, prepared.best_snr_db, prepared.segments_total
+                speaker_id or "<direct>", prepared.best_snr_db, prepared.segments_total
             )
         prepared = self._drop_enroll_outliers(prepared)
         assert prepared.embeddings is not None  # the filter never empties a batch
 
         key = speaker_key or slugify(name)
-        language = self.config.canonical_language(transcript.language_code)
+        language = self.config.canonical_language(language)
+        id_seed = (
+            ("enroll", transcription_id, speaker_id, key)
+            if transcription_id is not None and speaker_id is not None
+            else None
+        )
         entries = self._make_entries(
             prepared,
             speaker_key=key,
             display_name=name,
             language=language,
-            source="scribe_enroll",
-            transcription_id=transcript.transcription_id,
-            id_seed=("enroll", transcript.transcription_id, speaker_id, key),
+            source=source,
+            transcription_id=transcription_id,
+            id_seed=id_seed,
         )
         self.store.add(self.write_namespace, entries)
 
@@ -181,38 +220,13 @@ class Impronta:
         mono = select_channel(decoded, None)
         windows = segment_windows(decoded.duration, self.config)
         prepared = prepare_segments(windows, mono, self.embedder, self.config)
-        if prepared.embeddings is None:
-            raise NoUsableSegmentsError("<direct>", prepared.best_snr_db, len(windows))
-        prepared = self._drop_enroll_outliers(prepared)
-        assert prepared.embeddings is not None  # the filter never empties a batch
-
-        language = self.config.canonical_language(language)
-        key = speaker_key or slugify(name)
-        entries = self._make_entries(
+        return self.enroll_prepared(
             prepared,
-            speaker_key=key,
-            display_name=name,
+            name=name,
             language=language,
+            speaker_key=speaker_key,
             source="direct_enroll",
-            transcription_id=None,
-            id_seed=None,  # no natural idempotency key for raw clips
-        )
-        self.store.add(self.write_namespace, entries)
-
-        merged: tuple[str, ...] = ()
-        if self.config.merge_unknowns_on_enroll:
-            merged = self._merge_matching_unknowns(key, name, language, prepared.embeddings)
-        self._enforce_speaker_cap(self.write_namespace, key)
-
-        return EnrollResult(
-            speaker_key=key,
-            display_name=name,
-            language=language,
-            segments_total=len(windows),
-            segments_used=len(prepared.segments),
-            quality_tier=prepared.quality_tier or "low",
-            merged_unknown_keys=merged,
-            entry_ids=tuple(e.entry_id for e in entries),
+            transcription_id=None,  # no natural idempotency key for raw clips
         )
 
     # ------------------------------------------------------------------
@@ -241,23 +255,57 @@ class Impronta:
         for transcript in transcripts:
             mono = select_channel(decoded, transcript.channel_index if multi else None)
             segment_map = segment_words(transcript.words, self.config)
-            for sid in transcript.speaker_ids():
-                qid = f"{transcript.channel_index}:{sid}" if multi else sid
-                prepared = prepare_segments(
+            prepared_map = {
+                (f"{transcript.channel_index}:{sid}" if multi else sid): prepare_segments(
                     segment_map.get(sid, []), mono, self.embedder, self.config
                 )
-                match, proposal = self._match_speaker(
-                    qid, transcript, prepared, language_filter
-                )
-                speakers[qid] = match
-                if proposal is not None:
-                    proposals.append(proposal)
+                for sid in transcript.speaker_ids()
+            }
+            partial = self.identify_prepared(
+                prepared_map,
+                language_code=transcript.language_code,
+                transcription_id=transcript.transcription_id,
+                language_filter=language_filter,
+            )
+            speakers.update(partial.speakers)
+            proposals.extend(partial.proposed_unknowns)
 
         return IdentifyResult(
             speakers=speakers,
             proposed_unknowns=tuple(proposals),
             language_code=transcripts[0].language_code,
             transcription_id=transcripts[0].transcription_id,
+        )
+
+    def identify_prepared(
+        self,
+        prepared_map: dict[str, PreparedSpeaker],
+        *,
+        language_code: str,
+        transcription_id: str,
+        language_filter: bool = True,
+    ) -> IdentifyResult:
+        """Embed-free identification over already-prepared speakers.
+
+        READ-ONLY like :meth:`identify`. Used by the public method and by
+        the tuning harness (cache-built ``PreparedSpeaker`` objects).
+        ``language_code`` may be a raw STT code — it is normalized here.
+        """
+        speakers: dict[str, SpeakerMatch] = {}
+        proposals: list[UnknownProposal] = []
+        language = self.config.canonical_language(language_code)
+        for qid, prepared in prepared_map.items():
+            match, proposal = self._match_speaker(
+                qid, transcription_id, language, language_filter, prepared
+            )
+            speakers[qid] = match
+            if proposal is not None:
+                proposals.append(proposal)
+        return IdentifyResult(
+            speakers=speakers,
+            proposed_unknowns=tuple(proposals),
+            language_code=language_code,
+            transcription_id=transcription_id,
         )
 
     def commit_unknowns(self, proposals: Sequence[UnknownProposal]) -> list[str]:
@@ -349,74 +397,109 @@ class Impronta:
         for transcript in transcripts:
             mono = select_channel(decoded, transcript.channel_index if multi else None)
             segment_map = segment_words(transcript.words, cfg)
-            language = cfg.canonical_language(transcript.language_code)
-            for sid in transcript.speaker_ids():
-                qid = f"{transcript.channel_index}:{sid}" if multi else sid
-                prepared = prepare_segments(
+            prepared_map = {
+                (f"{transcript.channel_index}:{sid}" if multi else sid): prepare_segments(
                     segment_map.get(sid, []), mono, self.embedder, cfg
                 )
-                if prepared.embeddings is None:
-                    continue
-                outcome = run_vote(
-                    prepared.embeddings,
-                    prepared.segments,
-                    self.store,
-                    self.read_namespaces,
-                    language if language_filter else None,
-                    cfg,
+                for sid in transcript.speaker_ids()
+            }
+            proposals.extend(
+                self.propose_reinforcements_prepared(
+                    prepared_map,
+                    language_code=transcript.language_code,
+                    transcription_id=transcript.transcription_id,
+                    language_filter=language_filter,
                 )
-                if (
-                    outcome.winner_key == UNKNOWN_BUCKET
-                    or outcome.winner_namespace is None
-                    or outcome.mean_similarity is None
-                    or outcome.mean_similarity < cfg.merge_threshold
-                ):
-                    continue
-                rival_sims = [
-                    c.mean_similarity
-                    for c in outcome.candidates
-                    if c.speaker_key not in (outcome.winner_key, UNKNOWN_BUCKET)
-                    and c.mean_similarity is not None
-                ]
-                if rival_sims and (
-                    outcome.mean_similarity - max(rival_sims) < cfg.reinforce_margin
-                ):
-                    continue
-                stored = self.store.get_speaker_entries(
-                    outcome.winner_namespace, outcome.winner_key
-                )
-                if not stored:
-                    continue
-                profile = np.stack([e.embedding for e in stored])
-                best_vs_profile = (prepared.embeddings @ profile.T).max(axis=1)
-                keep = (best_vs_profile >= cfg.merge_threshold) & (
-                    best_vs_profile < self.NOVELTY_CEILING
-                )
-                if not keep.any():
-                    continue
-                proposals.append(
-                    ReinforcementProposal(
-                        speaker_key=outcome.winner_key,
-                        namespace=outcome.winner_namespace,
-                        display_name=outcome.winner_display_name,
-                        query_speaker_id=qid,
-                        transcription_id=transcript.transcription_id,
-                        language=language,
-                        mean_similarity=outcome.mean_similarity,
-                        embeddings=prepared.embeddings[keep],
-                        segments=tuple(
-                            SegmentInfo(
-                                start=s.start,
-                                end=s.end,
-                                confidence=s.confidence,
-                                snr_db=s.snr_db if s.snr_db is not None else 0.0,
-                            )
-                            for s, k in zip(prepared.segments, keep, strict=True)
-                            if k
-                        ),
-                    )
-                )
+            )
         return proposals
+
+    def propose_reinforcements_prepared(
+        self,
+        prepared_map: dict[str, PreparedSpeaker],
+        *,
+        language_code: str,
+        transcription_id: str,
+        language_filter: bool = True,
+    ) -> list[ReinforcementProposal]:
+        """Embed-free reinforcement proposal pass (see gate docs above)."""
+        language = self.config.canonical_language(language_code)
+        proposals = []
+        for qid, prepared in prepared_map.items():
+            p = self._reinforce_one(
+                qid, prepared, language, transcription_id, language_filter
+            )
+            if p is not None:
+                proposals.append(p)
+        return proposals
+
+    def _reinforce_one(
+        self,
+        qid: str,
+        prepared: PreparedSpeaker,
+        language: str,  # canonical
+        transcription_id: str,
+        language_filter: bool,
+    ) -> ReinforcementProposal | None:
+        cfg = self.config
+        if prepared.embeddings is None:
+            return None
+        outcome = run_vote(
+            prepared.embeddings,
+            prepared.segments,
+            self.store,
+            self.read_namespaces,
+            language if language_filter else None,
+            cfg,
+        )
+        if (
+            outcome.winner_key == UNKNOWN_BUCKET
+            or outcome.winner_namespace is None
+            or outcome.mean_similarity is None
+            or outcome.mean_similarity < cfg.merge_threshold
+        ):
+            return None
+        rival_sims = [
+            c.mean_similarity
+            for c in outcome.candidates
+            if c.speaker_key not in (outcome.winner_key, UNKNOWN_BUCKET)
+            and c.mean_similarity is not None
+        ]
+        if rival_sims and (
+            outcome.mean_similarity - max(rival_sims) < cfg.reinforce_margin
+        ):
+            return None
+        stored = self.store.get_speaker_entries(
+            outcome.winner_namespace, outcome.winner_key
+        )
+        if not stored:
+            return None
+        profile = np.stack([e.embedding for e in stored])
+        best_vs_profile = (prepared.embeddings @ profile.T).max(axis=1)
+        keep = (best_vs_profile >= cfg.merge_threshold) & (
+            best_vs_profile < self.NOVELTY_CEILING
+        )
+        if not keep.any():
+            return None
+        return ReinforcementProposal(
+            speaker_key=outcome.winner_key,
+            namespace=outcome.winner_namespace,
+            display_name=outcome.winner_display_name,
+            query_speaker_id=qid,
+            transcription_id=transcription_id,
+            language=language,
+            mean_similarity=outcome.mean_similarity,
+            embeddings=prepared.embeddings[keep],
+            segments=tuple(
+                SegmentInfo(
+                    start=s.start,
+                    end=s.end,
+                    confidence=s.confidence,
+                    snr_db=s.snr_db if s.snr_db is not None else 0.0,
+                )
+                for s, k in zip(prepared.segments, keep, strict=True)
+                if k
+            ),
+        )
 
     def commit_reinforcements(
         self, proposals: Sequence[ReinforcementProposal]
@@ -608,9 +691,10 @@ class Impronta:
     def _match_speaker(
         self,
         qid: str,
-        transcript: ParsedTranscript,
-        prepared: PreparedSpeaker,
+        transcription_id: str,
+        language: str,  # canonical
         language_filter: bool,
+        prepared: PreparedSpeaker,
     ) -> tuple[SpeakerMatch, UnknownProposal | None]:
         cfg = self.config
         if prepared.embeddings is None:
@@ -632,7 +716,7 @@ class Impronta:
             prepared.segments,
             self.store,
             self.read_namespaces,
-            cfg.canonical_language(transcript.language_code) if language_filter else None,
+            language if language_filter else None,
             cfg,
         )
 
@@ -660,9 +744,9 @@ class Impronta:
         if reason is None:
             proposal = UnknownProposal(
                 query_speaker_id=qid,
-                transcription_id=transcript.transcription_id,
-                language=cfg.canonical_language(transcript.language_code),
-                suggested_key=suggested_unknown_key(transcript.transcription_id, qid),
+                transcription_id=transcription_id,
+                language=language,
+                suggested_key=suggested_unknown_key(transcription_id, qid),
                 embeddings=prepared.embeddings,
                 segments=tuple(
                     SegmentInfo(

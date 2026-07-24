@@ -30,9 +30,19 @@ from .models import (
     UnknownProposal,
 )
 from .naming import apply_names, format_transcript, resolve_label
-from .store import FaissLocalStore, InMemoryStore, VectorStore
+from .store import InMemoryStore, VectorStore
 
 __version__ = "0.1.0"
+
+
+def __getattr__(name: str):
+    # FaissLocalStore stays lazy so `import impronta` never loads faiss;
+    # see impronta/store/__init__.py for why.
+    if name == "FaissLocalStore":
+        from .store.faiss_local import FaissLocalStore
+
+        return FaissLocalStore
+    raise AttributeError(name)
 
 __all__ = [
     "Impronta",
