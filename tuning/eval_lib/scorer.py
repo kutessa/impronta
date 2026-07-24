@@ -48,6 +48,7 @@ class ScoredRow:
     mean_similarity: float | None
     bucket: str  # "tune" | "test" | "all"
     multi_speaker: bool
+    match: SpeakerMatch | None = None  # full match for analysis tools
 
 
 def categorize(match: SpeakerMatch, person: str, enrolled: bool) -> str:

@@ -71,7 +71,15 @@ def run_vote(
                 sims.setdefault(key, []).append(score)
                 matched = True
         if not matched:
-            totals[UNKNOWN_BUCKET] += seg.duration
+            # weight unmatched evidence at the threshold value, NOT 1.0: the
+            # threshold is by definition the tipping point between "same
+            # voice" and "not sure", so a segment matched at 0.55 must
+            # outweigh an equal-duration unmatched segment when the
+            # threshold is 0.40. At weight 1.0 the unknown bucket had ~2x
+            # per-second advantage and routinely outvoted genuine matches
+            # (measured on production data: 23 of 26 missed identifications
+            # of one speaker had above-threshold candidate scores).
+            totals[UNKNOWN_BUCKET] += seg.duration * cfg.similarity_threshold
 
     def mean_sim(key: str) -> float | None:
         values = sims.get(key)

@@ -127,6 +127,7 @@ def run_static(
                     mean_similarity=match.mean_similarity,
                     bucket=split[rec.rid],
                     multi_speaker=multi,
+                    match=match,
                 )
             )
     return result
@@ -199,6 +200,7 @@ def run_chrono(data: AccountData, cfg: ImprontaConfig) -> ChronoResult:
                     mean_similarity=match.mean_similarity,
                     bucket="all",
                     multi_speaker=multi,
+                    match=match,
                 )
             )
 
