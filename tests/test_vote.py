@@ -110,6 +110,24 @@ def test_segment_credits_multiple_close_speakers():
     assert by_key["alice"].score_share > by_key["bob"].score_share
 
 
+def test_best_segment_index_points_at_winners_best_scoring_segment():
+    store = seeded_store()
+    weaker_alice = blend(basis(0), basis(2), 0.6)
+    stronger_alice = blend(basis(0), basis(2), 0.9)
+    embeddings = np.stack([weaker_alice, stronger_alice])
+    outcome = run_vote(embeddings, [seg(0, 5), seg(6, 11)], store, ["ns"], "en", CFG)
+    assert outcome.winner_key == "alice"
+    assert outcome.best_segment_index == 1
+
+
+def test_best_segment_index_none_when_unknown_wins():
+    store = seeded_store()
+    barely = blend(basis(0), basis(2), 0.30)  # below threshold everywhere
+    outcome = run_vote(np.stack([barely]), [seg(0, 3)], store, ["ns"], "en", CFG)
+    assert outcome.winner_key == UNKNOWN_BUCKET
+    assert outcome.best_segment_index is None
+
+
 def test_deterministic_tie_break_prefers_higher_mean_similarity():
     store = InMemoryStore()
     store.add(

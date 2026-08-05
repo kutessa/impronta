@@ -18,6 +18,7 @@ import hashlib
 import re
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 
 import numpy as np
@@ -43,6 +44,7 @@ from .models import (
     SpeakerSummary,
     StoreEntry,
     UnknownProposal,
+    composite_quality,
     utcnow,
 )
 from .pipeline import PreparedSpeaker, cohesion, prepare_segments
@@ -64,6 +66,12 @@ def _det_id(*parts: object) -> str:
 def suggested_unknown_key(transcription_id: str, query_speaker_id: str) -> str:
     digest = hashlib.sha1(f"{transcription_id}:{query_speaker_id}".encode()).hexdigest()
     return f"unknown-{digest[:12]}"
+
+
+def _stamp_audio_id(segments: list[Segment], audio_id: str | None) -> list[Segment]:
+    if audio_id is None:
+        return segments
+    return [replace(s, audio_id=audio_id) for s in segments]
 
 
 class Impronta:
@@ -122,8 +130,14 @@ class Impronta:
         speaker_id: str,
         name: str,
         speaker_key: str | None = None,
+        *,
+        audio_id: str | None = None,
     ) -> EnrollResult:
         """Enroll a labeled speaker from a transcribed recording.
+
+        ``audio_id`` is an opaque caller-supplied id for the source audio
+        (impronta never resolves it); it is stamped on every resulting
+        segment so results can be traced back to the recording.
 
         Raises :class:`SpeakerNotInTranscriptError` if ``speaker_id`` is not
         in the transcript and :class:`NoUsableSegmentsError` if nothing
@@ -134,6 +148,7 @@ class Impronta:
         multi = len(transcripts) > 1
 
         transcript, segments = self._find_speaker(transcripts, speaker_id)
+        segments = _stamp_audio_id(segments, audio_id)
         mono = select_channel(decoded, transcript.channel_index if multi else None)
         prepared = prepare_segments(segments, mono, self.embedder, self.config)
         return self.enroll_prepared(
@@ -163,7 +178,8 @@ class Impronta:
         builds ``prepared`` from a precomputed embedding cache via
         :func:`impronta.pipeline.assemble_prepared`). Entry ids are
         deterministic when both ``transcription_id`` and ``speaker_id`` are
-        given.
+        given. Takes no ``audio_id`` — callers building ``prepared``
+        directly stamp their own :class:`~impronta.models.Segment` objects.
         """
         if prepared.embeddings is None:
             raise NoUsableSegmentsError(
@@ -197,6 +213,19 @@ class Impronta:
             )
         self._enforce_speaker_cap(self.write_namespace, key)
 
+        seg_infos = tuple(SegmentInfo.from_segment(s) for s in prepared.segments)
+        ideal = (
+            max(
+                range(len(prepared.segments)),
+                key=lambda i: composite_quality(
+                    prepared.segments[i].snr_db,
+                    prepared.segments[i].confidence,
+                    prepared.segments[i].duration,
+                ),
+            )
+            if prepared.segments
+            else None
+        )
         return EnrollResult(
             speaker_key=key,
             display_name=name,
@@ -206,6 +235,8 @@ class Impronta:
             quality_tier=prepared.quality_tier or "low",
             merged_unknown_keys=merged,
             entry_ids=tuple(e.entry_id for e in entries),
+            segments=seg_infos,
+            ideal_segment_index=ideal,
         )
 
     def add_speaker_from_audio(
@@ -214,11 +245,17 @@ class Impronta:
         name: str,
         language: str,
         speaker_key: str | None = None,
+        *,
+        audio_id: str | None = None,
     ) -> EnrollResult:
-        """Enroll from a raw clip known to contain only this person's voice."""
+        """Enroll from a raw clip known to contain only this person's voice.
+
+        ``audio_id`` is an opaque caller-supplied id stamped on every
+        resulting segment (see :meth:`add_speaker`).
+        """
         decoded = load_audio(audio, self.config.sample_rate)
         mono = select_channel(decoded, None)
-        windows = segment_windows(decoded.duration, self.config)
+        windows = _stamp_audio_id(segment_windows(decoded.duration, self.config), audio_id)
         prepared = prepare_segments(windows, mono, self.embedder, self.config)
         return self.enroll_prepared(
             prepared,
@@ -239,12 +276,16 @@ class Impronta:
         audio: AudioInput,
         *,
         language_filter: bool = True,
+        audio_id: str | None = None,
     ) -> IdentifyResult:
         """Identify every diarized speaker. READ-ONLY — never writes.
 
         Unknown voices that pass the proposal gates come back in
         ``proposed_unknowns``; persist them with :meth:`commit_unknowns`.
         Set ``language_filter=False`` to match across languages.
+        ``audio_id`` is an opaque caller-supplied id stamped on every
+        segment carried by matches and proposals (one id per call — a
+        multichannel recording is still a single audio file).
         """
         transcripts = parse_scribe_response(scribe_response)
         decoded = load_audio(audio, self.config.sample_rate)
@@ -257,7 +298,10 @@ class Impronta:
             segment_map = segment_words(transcript.words, self.config)
             prepared_map = {
                 (f"{transcript.channel_index}:{sid}" if multi else sid): prepare_segments(
-                    segment_map.get(sid, []), mono, self.embedder, self.config
+                    _stamp_audio_id(segment_map.get(sid, []), audio_id),
+                    mono,
+                    self.embedder,
+                    self.config,
                 )
                 for sid in transcript.speaker_ids()
             }
@@ -290,6 +334,8 @@ class Impronta:
         READ-ONLY like :meth:`identify`. Used by the public method and by
         the tuning harness (cache-built ``PreparedSpeaker`` objects).
         ``language_code`` may be a raw STT code — it is normalized here.
+        Takes no ``audio_id`` — callers building ``prepared_map`` directly
+        stamp their own :class:`~impronta.models.Segment` objects.
         """
         speakers: dict[str, SpeakerMatch] = {}
         proposals: list[UnknownProposal] = []
@@ -370,6 +416,7 @@ class Impronta:
         audio: AudioInput,
         *,
         language_filter: bool = True,
+        audio_id: str | None = None,
     ) -> list[ReinforcementProposal]:
         """Propose strengthening profiles from confident identifications.
 
@@ -399,7 +446,10 @@ class Impronta:
             segment_map = segment_words(transcript.words, cfg)
             prepared_map = {
                 (f"{transcript.channel_index}:{sid}" if multi else sid): prepare_segments(
-                    segment_map.get(sid, []), mono, self.embedder, cfg
+                    _stamp_audio_id(segment_map.get(sid, []), audio_id),
+                    mono,
+                    self.embedder,
+                    cfg,
                 )
                 for sid in transcript.speaker_ids()
             }
@@ -492,12 +542,7 @@ class Impronta:
             mean_similarity=outcome.mean_similarity,
             embeddings=prepared.embeddings[keep],
             segments=tuple(
-                SegmentInfo(
-                    start=s.start,
-                    end=s.end,
-                    confidence=s.confidence,
-                    snr_db=s.snr_db if s.snr_db is not None else 0.0,
-                )
+                SegmentInfo.from_segment(s)
                 for s, k in zip(prepared.segments, keep, strict=True)
                 if k
             ),
@@ -722,6 +767,8 @@ class Impronta:
             cfg,
         )
 
+        seg_infos = tuple(SegmentInfo.from_segment(s) for s in prepared.segments)
+
         if outcome.winner_key != UNKNOWN_BUCKET:
             return (
                 SpeakerMatch(
@@ -737,6 +784,8 @@ class Impronta:
                     num_segments_used=len(prepared.segments),
                     num_segments_total=prepared.segments_total,
                     near_misses=outcome.near_misses,
+                    segments=seg_infos,
+                    ideal_segment_index=outcome.best_segment_index,
                 ),
                 None,
             )
@@ -750,15 +799,7 @@ class Impronta:
                 language=language,
                 suggested_key=suggested_unknown_key(transcription_id, qid),
                 embeddings=prepared.embeddings,
-                segments=tuple(
-                    SegmentInfo(
-                        start=s.start,
-                        end=s.end,
-                        confidence=s.confidence,
-                        snr_db=s.snr_db if s.snr_db is not None else 0.0,
-                    )
-                    for s in prepared.segments
-                ),
+                segments=seg_infos,
                 quality_tier=prepared.quality_tier or "low",
             )
         match = SpeakerMatch(
@@ -775,6 +816,7 @@ class Impronta:
             num_segments_total=prepared.segments_total,
             near_misses=outcome.near_misses,
             no_proposal_reason=reason,
+            segments=seg_infos,
         )
         return match, proposal
 

@@ -32,6 +32,12 @@ m4a = ["av>=12"]
 [dependency-groups]
 demo = ["gradio>=5", "requests>=2.31"]
 tuning = ["optuna>=3.6", "pandas>=2.0", "matplotlib>=3.8"]
+docs = [
+    "sphinx>=8",
+    "furo>=2024.8",
+    "myst-parser>=4",
+    "sphinx-copybutton>=0.5",
+]
 dev = [
     "pytest>=8",
     "pytest-cov>=5",

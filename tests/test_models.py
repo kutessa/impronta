@@ -44,6 +44,7 @@ seg_infos = st.builds(
     end=st.floats(100, 200, allow_nan=False, width=32),
     confidence=st.floats(0, 1, allow_nan=False, width=32),
     snr_db=st.floats(-20, 100, allow_nan=False, width=32),
+    audio_id=st.one_of(st.none(), keys),
 )
 
 entries = st.builds(
@@ -87,6 +88,8 @@ matches = st.builds(
         st.tuples(keys, st.floats(0, 1, allow_nan=False, width=32)), max_size=3
     ).map(tuple),
     no_proposal_reason=st.one_of(st.none(), st.sampled_from(["gray_zone", "low_cohesion"])),
+    segments=st.lists(seg_infos, max_size=2).map(tuple),
+    ideal_segment_index=st.one_of(st.none(), st.integers(0, 3)),
 )
 
 proposals = st.builds(
@@ -110,6 +113,8 @@ enroll_results = st.builds(
     quality_tier=st.sampled_from(["high", "medium", "low"]),
     merged_unknown_keys=st.lists(keys, max_size=2).map(tuple),
     entry_ids=st.lists(keys, max_size=2).map(tuple),
+    segments=st.lists(seg_infos, max_size=2).map(tuple),
+    ideal_segment_index=st.one_of(st.none(), st.integers(0, 3)),
 )
 
 summaries = st.builds(
@@ -200,6 +205,55 @@ def test_identify_result_is_json_serializable():
     )
     parsed = json.loads(json.dumps(r.to_dict()))
     assert IdentifyResult.from_dict(parsed).speakers["s0"].display_name == "Alice"
+
+
+def test_segment_info_from_dict_without_audio_id():
+    # pre-refactor serialized payloads lack the key
+    old = {"start": 0.0, "end": 2.0, "confidence": 0.9, "snr_db": 25.0}
+    assert SegmentInfo.from_dict(old).audio_id is None
+
+
+def test_enroll_result_from_dict_old_payload():
+    old = {
+        "speaker_key": "alice",
+        "display_name": "Alice",
+        "language": "en",
+        "segments_total": 3,
+        "segments_used": 2,
+        "quality_tier": "high",
+    }
+    r = EnrollResult.from_dict(old)
+    assert r.segments == ()
+    assert r.ideal_segment_index is None
+    assert r.ideal_segment is None
+
+
+def test_speaker_match_from_dict_old_payload():
+    old = {
+        "query_speaker_id": "s0",
+        "speaker_key": "alice",
+        "display_name": "Alice",
+        "namespace": "ns",
+        "is_unknown": False,
+        "identifiable": True,
+    }
+    m = SpeakerMatch.from_dict(old)
+    assert m.segments == ()
+    assert m.ideal_segment is None
+
+
+def test_ideal_segment_property():
+    segs = (SegmentInfo(0.0, 2.0, 0.9, 25.0), SegmentInfo(3.0, 8.0, 0.95, 30.0))
+    m = SpeakerMatch(
+        "s0", "alice", "Alice", "ns", False, True,
+        segments=segs, ideal_segment_index=1,
+    )
+    assert m.ideal_segment == segs[1]
+    r = EnrollResult(
+        "alice", "Alice", "en", 2, 2, "high",
+        segments=segs, ideal_segment_index=0,
+    )
+    assert r.ideal_segment == segs[0]
 
 
 def test_composite_quality_saturates():

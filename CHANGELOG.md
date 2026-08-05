@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Segment provenance on results: `add_speaker`, `add_speaker_from_audio`,
+  `identify`, and `propose_reinforcements` accept an opaque caller-supplied
+  `audio_id` that is stamped on every `Segment`/`SegmentInfo`, so segments
+  can be traced back to the source recording in an external audio service.
+- `EnrollResult.segments` (aligned 1:1 with `entry_ids`) and
+  `EnrollResult.ideal_segment` — the enrolled segment with the best
+  composite quality.
+- `SpeakerMatch.segments` (the segments used in the vote) and
+  `SpeakerMatch.ideal_segment` — the segment whose above-threshold
+  similarity to the winner was highest (`VoteOutcome.best_segment_index`).
+- `Segment` and `SegmentInfo` are now exported from the package root;
+  `SegmentInfo.from_segment()` conversion helper.
+- Serialization stays backward compatible: `from_dict` reads all new keys
+  with defaults, so pre-refactor payloads (e.g. queued proposals) still load.
+- Sphinx documentation site under `docs/` (furo theme, MyST markdown) with a
+  `docs` dependency group: `uv run --group docs sphinx-build -b html docs
+  docs/_build/html`.
 - Embed-free pipeline seams for replay/tuning: `measure_segments` /
   `select_segments` / `assemble_prepared` (pipeline) and `enroll_prepared` /
   `identify_prepared` / `propose_reinforcements_prepared` (API). Behavior

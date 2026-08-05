@@ -681,3 +681,122 @@ def test_multichannel_keys_and_per_channel_audio(voices):
     result = app.identify(resp, wav_bytes(stereo))
     assert result.speakers["0:speaker_0"].display_name == "Alice"
     assert result.speakers["1:speaker_0"].display_name == "Bob"
+
+
+# ---------------------------------------------------------------------------
+# exposed internals: audio_id threading, segments used, ideal segment
+# ---------------------------------------------------------------------------
+
+
+def test_audio_id_threads_through_enroll(voices):
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-alice")
+    result = app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice", audio_id="af-1")
+    assert result.segments and all(s.audio_id == "af-1" for s in result.segments)
+
+    clip = make_voice_audio(12.0, BOB)
+    direct = app.add_speaker_from_audio(wav_bytes(clip), "Bob", "en", audio_id="af-2")
+    assert direct.segments and all(s.audio_id == "af-2" for s in direct.segments)
+
+
+def test_audio_id_threads_through_identify_and_proposals(voices):
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-alice")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+
+    resp, audio = solo_recording(ALICE, spans=((0.0, 4.0),), tid="t-q")
+    match = app.identify(resp, wav_bytes(audio), audio_id="af-q").speakers["speaker_0"]
+    assert match.segments and all(s.audio_id == "af-q" for s in match.segments)
+
+    resp2, audio2 = stranger_recording(tid="t-s")
+    result = app.identify(resp2, wav_bytes(audio2), audio_id="af-s")
+    proposal = result.proposed_unknowns[0]
+    assert proposal.segments and all(s.audio_id == "af-s" for s in proposal.segments)
+    unknown_match = result.speakers["speaker_0"]
+    assert unknown_match.segments and all(s.audio_id == "af-s" for s in unknown_match.segments)
+
+
+def test_audio_id_defaults_to_none(voices):
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-alice")
+    result = app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    assert all(s.audio_id is None for s in result.segments)
+
+    resp, audio = solo_recording(ALICE, spans=((0.0, 4.0),), tid="t-q")
+    match = app.identify(resp, wav_bytes(audio)).speakers["speaker_0"]
+    assert all(s.audio_id is None for s in match.segments)
+
+
+def test_enroll_result_segments_and_ideal(voices):
+    from impronta.models import composite_quality
+
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-alice")
+    result = app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    assert len(result.segments) == result.segments_used
+    assert len(result.segments) == len(result.entry_ids)
+    best = max(
+        result.segments,
+        key=lambda s: composite_quality(s.snr_db, s.confidence, s.duration),
+    )
+    assert result.ideal_segment == best
+
+
+def test_identify_match_carries_segments(voices):
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-alice")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+
+    resp, audio = solo_recording(ALICE, spans=((0.0, 4.0),), tid="t-q")
+    match = app.identify(resp, wav_bytes(audio)).speakers["speaker_0"]
+    assert len(match.segments) == match.num_segments_used
+    assert match.ideal_segment_index is not None
+    assert 0 <= match.ideal_segment_index < len(match.segments)
+    assert match.ideal_segment in match.segments
+
+    # unknown outcome: segments still carried, but no ideal segment
+    resp2, audio2 = stranger_recording(tid="t-s")
+    unknown = app.identify(resp2, wav_bytes(audio2)).speakers["speaker_0"]
+    assert len(unknown.segments) == unknown.num_segments_used
+    assert unknown.ideal_segment is None
+
+
+def test_unidentifiable_match_has_no_segments(voices):
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-alice")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    resp, audio = solo_recording(ALICE, spans=((0.0, 4.0),), logprob=-2.0, tid="t-q")
+    match = app.identify(resp, wav_bytes(audio)).speakers["speaker_0"]
+    assert not match.identifiable
+    assert match.segments == ()
+    assert match.ideal_segment is None
+
+
+def test_ideal_segment_is_best_vote_scorer(voices):
+    voices = dict(voices)
+    NEAR_ALICE = 550.0
+    voices[NEAR_ALICE] = blend(basis(0), basis(5), 0.7)
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-alice")
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+
+    # one span is Alice's exact voice (sim 1.0), the other only 0.7 similar
+    duration = 11.2
+    audio = compose_timeline(duration, [(0.0, 5.0, NEAR_ALICE), (6.0, 11.0, ALICE)])
+    words = speech_words("speaker_0", 0.0, 5.0) + speech_words("speaker_0", 6.0, 11.0)
+    resp = make_scribe_response(words, language="en", transcription_id="t-mixed")
+    match = app.identify(resp, wav_bytes(audio)).speakers["speaker_0"]
+    assert match.display_name == "Alice"
+    assert match.ideal_segment is not None
+    assert match.ideal_segment.start == pytest.approx(6.0, abs=0.5)
+
+
+def test_reinforcement_segments_carry_audio_id(voices):
+    app = reinforce_setup(voices)
+    resp, audio = solo_recording(
+        SAME_VOICE_NEW_TAKE, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-new-take"
+    )
+    proposals = app.propose_reinforcements(resp, wav_bytes(audio), audio_id="af-r")
+    assert len(proposals) == 1
+    assert proposals[0].segments
+    assert all(s.audio_id == "af-r" for s in proposals[0].segments)

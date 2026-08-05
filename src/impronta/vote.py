@@ -33,6 +33,11 @@ class VoteOutcome:
     mean_similarity: float | None  # over the winner's contributing segments
     best_named_score: float | None  # best score seen for ANY stored speaker
     near_misses: tuple[tuple[str, float], ...]
+    best_segment_index: int | None = None
+    # index of the segment whose above-threshold similarity to the winner was
+    # highest (its strongest contributing evidence); None when the unknown
+    # bucket wins. Deliberately NOT derived from best_scores, which includes
+    # below-threshold scores that never credited the vote.
 
 
 def run_vote(
@@ -51,9 +56,10 @@ def run_vote(
     sims: dict[str, list[float]] = {}
     meta: dict[str, tuple[str | None, str | None]] = {UNKNOWN_BUCKET: (None, None)}
     best_scores: dict[str, float] = {}
+    contrib_best: dict[str, tuple[float, int]] = {}  # best contributing (score, seg index)
 
     search_filter = SearchFilter(language=language) if language is not None else None
-    for row, seg in zip(embeddings, segments, strict=True):
+    for seg_idx, (row, seg) in enumerate(zip(embeddings, segments, strict=True)):
         hits = store.search(row, namespaces, k=cfg.search_k, filter=search_filter)
         # best score per distinct speaker among this segment's neighbours
         per_speaker: dict[str, float] = {}
@@ -69,6 +75,8 @@ def run_vote(
             if score >= cfg.similarity_threshold:
                 totals[key] = totals.get(key, 0.0) + seg.duration * score
                 sims.setdefault(key, []).append(score)
+                if key not in contrib_best or score > contrib_best[key][0]:
+                    contrib_best[key] = (score, seg_idx)
                 matched = True
         if not matched:
             # weight unmatched evidence at the threshold value, NOT 1.0: the
@@ -132,4 +140,5 @@ def run_vote(
         mean_similarity=mean_sim(winner),
         best_named_score=max(best_scores.values()) if best_scores else None,
         near_misses=near_misses,
+        best_segment_index=contrib_best[winner][1] if winner in contrib_best else None,
     )

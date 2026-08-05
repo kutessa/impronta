@@ -91,6 +91,7 @@ class Segment:
     end: float
     confidence: float  # exp(mean logprob) of member words; 1.0 when unknown
     snr_db: float | None = None  # filled in by the pipeline
+    audio_id: str | None = None  # opaque caller-supplied audio file id
 
     @property
     def duration(self) -> float:
@@ -105,10 +106,21 @@ class SegmentInfo:
     end: float
     confidence: float
     snr_db: float
+    audio_id: str | None = None  # opaque caller-supplied audio file id
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @classmethod
+    def from_segment(cls, seg: Segment) -> SegmentInfo:
+        return cls(
+            start=seg.start,
+            end=seg.end,
+            confidence=seg.confidence,
+            snr_db=seg.snr_db if seg.snr_db is not None else 0.0,
+            audio_id=seg.audio_id,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,12 +128,17 @@ class SegmentInfo:
             "end": self.end,
             "confidence": self.confidence,
             "snr_db": self.snr_db,
+            "audio_id": self.audio_id,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SegmentInfo:
         return cls(
-            start=d["start"], end=d["end"], confidence=d["confidence"], snr_db=d["snr_db"]
+            start=d["start"],
+            end=d["end"],
+            confidence=d["confidence"],
+            snr_db=d["snr_db"],
+            audio_id=d.get("audio_id"),
         )
 
 
@@ -290,6 +307,15 @@ class EnrollResult:
     quality_tier: str  # 'high' | 'medium' | 'low'
     merged_unknown_keys: tuple[str, ...] = ()
     entry_ids: tuple[str, ...] = ()
+    segments: tuple[SegmentInfo, ...] = ()  # enrolled segments, aligned with entry_ids
+    ideal_segment_index: int | None = None  # index into segments: best composite_quality
+
+    @property
+    def ideal_segment(self) -> SegmentInfo | None:
+        """The highest-quality enrolled segment, or ``None`` when empty."""
+        if self.ideal_segment_index is None:
+            return None
+        return self.segments[self.ideal_segment_index]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -301,6 +327,8 @@ class EnrollResult:
             "quality_tier": self.quality_tier,
             "merged_unknown_keys": list(self.merged_unknown_keys),
             "entry_ids": list(self.entry_ids),
+            "segments": [s.to_dict() for s in self.segments],
+            "ideal_segment_index": self.ideal_segment_index,
         }
 
     @classmethod
@@ -314,6 +342,8 @@ class EnrollResult:
             quality_tier=d["quality_tier"],
             merged_unknown_keys=tuple(d.get("merged_unknown_keys", ())),
             entry_ids=tuple(d.get("entry_ids", ())),
+            segments=tuple(SegmentInfo.from_dict(s) for s in d.get("segments", ())),
+            ideal_segment_index=d.get("ideal_segment_index"),
         )
 
 
@@ -368,6 +398,16 @@ class SpeakerMatch:
     near_misses: tuple[tuple[str, float], ...] = ()
     no_proposal_reason: str | None = None
     # 'too_few_segments' | 'low_quality' | 'low_cohesion' | 'gray_zone'
+    segments: tuple[SegmentInfo, ...] = ()  # segments used in the vote; () when unidentifiable
+    ideal_segment_index: int | None = None
+    # index into segments: the winner's best above-threshold match; None unless identified
+
+    @property
+    def ideal_segment(self) -> SegmentInfo | None:
+        """The segment that matched the winner strongest, or ``None``."""
+        if self.ideal_segment_index is None:
+            return None
+        return self.segments[self.ideal_segment_index]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -384,6 +424,8 @@ class SpeakerMatch:
             "num_segments_total": self.num_segments_total,
             "near_misses": [[k, s] for k, s in self.near_misses],
             "no_proposal_reason": self.no_proposal_reason,
+            "segments": [s.to_dict() for s in self.segments],
+            "ideal_segment_index": self.ideal_segment_index,
         }
 
     @classmethod
@@ -402,6 +444,8 @@ class SpeakerMatch:
             num_segments_total=d.get("num_segments_total", 0),
             near_misses=tuple((k, s) for k, s in d.get("near_misses", ())),
             no_proposal_reason=d.get("no_proposal_reason"),
+            segments=tuple(SegmentInfo.from_dict(s) for s in d.get("segments", ())),
+            ideal_segment_index=d.get("ideal_segment_index"),
         )
 
 

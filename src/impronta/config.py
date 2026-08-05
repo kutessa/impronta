@@ -37,117 +37,142 @@ def default_cache_dir() -> str:
 class ImprontaConfig:
     """All pipeline tunables with production-tested defaults.
 
-    Segmentation
-    ------------
-    min_segment_sec: segments shorter than this are dropped — ECAPA-TDNN
-        embeddings on sub-second audio are unreliable.
-    max_segment_sec: an open segment is closed once extending it would exceed
-        this duration (split happens at a word boundary).
-    gap_tolerance_sec: consecutive same-speaker words closer than this are
-        merged into one segment; larger gaps start a new segment.
-    direct_window_sec: window size used by ``add_speaker_from_audio`` when
-        slicing a raw clip (no transcript) into embedding windows.
+    .. rubric:: Segmentation
 
-    Filtering
-    ---------
-    snr_tiers: progressive relaxation ladder for the blind (WADA) SNR filter.
+    ``min_segment_sec``
+        Segments shorter than this are dropped — ECAPA-TDNN embeddings on
+        sub-second audio are unreliable.
+    ``max_segment_sec``
+        An open segment is closed once extending it would exceed this
+        duration (split happens at a word boundary).
+    ``gap_tolerance_sec``
+        Consecutive same-speaker words closer than this are merged into one
+        segment; larger gaps start a new segment.
+    ``direct_window_sec``
+        Window size used by ``add_speaker_from_audio`` when slicing a raw
+        clip (no transcript) into embedding windows.
+
+    .. rubric:: Filtering
+
+    ``snr_tiers``
+        Progressive relaxation ladder for the blind (WADA) SNR filter.
         The first threshold with at least one passing segment wins and its
         tier label is reported on results.
-    min_kept_speech_sec: if the tier pass keeps less than this much speech,
-        the pipeline supplements with the best remaining segments (composite
-        quality order, above ``snr_floor_db``) and reports tier "low".
-        Real telephony audio reads 5-15 dB on WADA — without this rescue a
+    ``min_kept_speech_sec``
+        If the tier pass keeps less than this much speech, the pipeline
+        supplements with the best remaining segments (composite quality
+        order, above ``snr_floor_db``) and reports tier "low". Real
+        telephony audio reads 5-15 dB on WADA — without this rescue a
         20-minute call can reduce to seconds of evidence, and the resulting
         profiles are channel fingerprints instead of voiceprints (measured
         on production calls). Set to 0 to disable the rescue.
-    snr_floor_db: absolute floor — segments below it are never used, even
-        by the rescue (this is what keeps pure noise unusable).
-    min_segment_confidence: segments whose ElevenLabs transcription
-        confidence (``exp(mean logprob)``) is below this are dropped before
-        SNR filtering. Hard gate — never relaxed. Segments with no logprob
+    ``snr_floor_db``
+        Absolute floor — segments below it are never used, even by the
+        rescue (this is what keeps pure noise unusable).
+    ``min_segment_confidence``
+        Segments whose ElevenLabs transcription confidence
+        (``exp(mean logprob)``) is below this are dropped before SNR
+        filtering. Hard gate — never relaxed. Segments with no logprob
         data pass (confidence defaults to 1.0).
 
-    Matching
-    --------
-    similarity_threshold: minimum cosine similarity for a stored speaker to
-        receive credit from a segment. Below it the segment votes "unknown".
-        Calibrated 2026-07-24 against 145 annotated production recordings
-        (grid + Optuna + chronological replay): wrong-name errors stay near
-        zero down to ~0.42, cross the 2% budget just below 0.36, and explode
-        at 0.34. 0.40 sits midway between the zero-error point and the
+    .. rubric:: Matching
+
+    ``similarity_threshold``
+        Minimum cosine similarity for a stored speaker to receive credit
+        from a segment. Below it the segment votes "unknown". Calibrated
+        2026-07-24 against 145 annotated production recordings (grid +
+        Optuna + chronological replay): wrong-name errors stay near zero
+        down to ~0.42, cross the 2% budget just below 0.36, and explode at
+        0.34. 0.40 sits midway between the zero-error point and the
         recall-optimal edge — recall ~0.38 at ~1% wrong names. Move within
         [0.36, 0.42] to trade recall vs strictness; going below 0.36 is
         measurably unsafe on this audio.
-    search_k: neighbours fetched per segment during the vote. Each distinct
+    ``search_k``
+        Neighbours fetched per segment during the vote. Each distinct
         speaker among them is credited with their best score, so a 0.37 vs
-        0.34 near-tie between two stored speakers surfaces in `candidates`
+        0.34 near-tie between two stored speakers surfaces in ``candidates``
         instead of being winner-take-all.
-    reinforce_margin: profile reinforcement (``propose_reinforcements``)
-        only fires when the winner beats every other stored speaker's best
-        mean similarity by at least this margin — a contested match must
-        never feed a profile, or one wrong absorption drags the profile
-        toward the wrong voice and errors compound. (The score bar for
-        reinforcement itself is ``merge_threshold``, same as all other
-        profile-mutating decisions.)
-    reinforce_threshold: minimum mean similarity for reinforcement to fire
-        AND per-segment bar for harvesting. Deliberately stricter than
-        ``merge_threshold``: randomized replay of production data showed
-        wrong-voice absorptions cluster at 0.60-0.70 similarity (median
-        0.65), while only 14% reached 0.70 — this bar removes ~86% of
-        poisoning at modest cost to clean harvests.
-    reinforce_min_profile_entries: profiles with fewer stored embeddings
-        than this never self-train. A 1-2 entry profile enrolled from a
-        noisy clip is a channel fingerprint, not a voiceprint — other
-        voices clear the reinforcement bar against it and the error
-        compounds. Measured in randomized replay of production data:
-        without this gate 34% of reinforcement commits harvested the WRONG
-        person's voice.
-    enroll_outlier_margin: enrollment segments whose centroid-similarity
-        falls this far below the batch MEDIAN are dropped — diarization
-        sometimes attributes another person's words to the labeled speaker,
-        and one wrong segment poisons the profile. Relative to the median so
-        it adapts to audio quality (clean batches agree at ~0.9, telephony
-        batches at ~0.4-0.6). Requires >= 4 segments to activate.
-    merge_threshold: stricter bar used for DESTRUCTIVE decisions — merging an
-        unknown into a named speaker at enroll time, and deduplicating
-        proposals against existing unknowns at commit time. Keep this well
-        above ``similarity_threshold``: borderline scores must never corrupt
-        a profile.
-    gray_zone_margin: if the best named match scores within this margin
-        BELOW ``similarity_threshold``, the speaker is reported unknown but
-        NOT proposed for auto-enrollment (prevents one person fragmenting
-        into a named speaker plus a near-duplicate unknown). Near-miss
+    ``reinforce_margin``
+        Profile reinforcement (``propose_reinforcements``) only fires when
+        the winner beats every other stored speaker's best mean similarity
+        by at least this margin — a contested match must never feed a
+        profile, or one wrong absorption drags the profile toward the wrong
+        voice and errors compound. (The score bar for reinforcement itself
+        is ``merge_threshold``, same as all other profile-mutating
+        decisions.)
+    ``reinforce_threshold``
+        Minimum mean similarity for reinforcement to fire AND per-segment
+        bar for harvesting. Deliberately stricter than ``merge_threshold``:
+        randomized replay of production data showed wrong-voice absorptions
+        cluster at 0.60-0.70 similarity (median 0.65), while only 14%
+        reached 0.70 — this bar removes ~86% of poisoning at modest cost to
+        clean harvests.
+    ``reinforce_min_profile_entries``
+        Profiles with fewer stored embeddings than this never self-train.
+        A 1-2 entry profile enrolled from a noisy clip is a channel
+        fingerprint, not a voiceprint — other voices clear the
+        reinforcement bar against it and the error compounds. Measured in
+        randomized replay of production data: without this gate 34% of
+        reinforcement commits harvested the WRONG person's voice.
+    ``enroll_outlier_margin``
+        Enrollment segments whose centroid-similarity falls this far below
+        the batch MEDIAN are dropped — diarization sometimes attributes
+        another person's words to the labeled speaker, and one wrong
+        segment poisons the profile. Relative to the median so it adapts to
+        audio quality (clean batches agree at ~0.9, telephony batches at
+        ~0.4-0.6). Requires >= 4 segments to activate.
+    ``merge_threshold``
+        Stricter bar used for DESTRUCTIVE decisions — merging an unknown
+        into a named speaker at enroll time, and deduplicating proposals
+        against existing unknowns at commit time. Keep this well above
+        ``similarity_threshold``: borderline scores must never corrupt a
+        profile.
+    ``gray_zone_margin``
+        If the best named match scores within this margin BELOW
+        ``similarity_threshold``, the speaker is reported unknown but NOT
+        proposed for auto-enrollment (prevents one person fragmenting into
+        a named speaker plus a near-duplicate unknown). Near-miss
         candidates are reported so the app can ask the user.
 
-    Unknown proposal gating
-    -----------------------
-    min_proposal_segments: strangers with fewer usable segments than this are
-        never proposed (one-off voices: waiters, TVs).
-    min_proposal_tier: minimum SNR quality tier ("high"/"medium"/"low")
-        required to propose a stranger.
-    cohesion_threshold: minimum mean pairwise cosine among a stranger's own
-        segment embeddings. Low cohesion means the diarizer likely merged two
+    .. rubric:: Unknown proposal gating
+
+    ``min_proposal_segments``
+        Strangers with fewer usable segments than this are never proposed
+        (one-off voices: waiters, TVs).
+    ``min_proposal_tier``
+        Minimum SNR quality tier ("high"/"medium"/"low") required to
+        propose a stranger.
+    ``cohesion_threshold``
+        Minimum mean pairwise cosine among a stranger's own segment
+        embeddings. Low cohesion means the diarizer likely merged two
         people into one speaker_id — proposing would create a poisoned
         identity. Calibrated on real phone recordings: single-speaker
         segments score ~0.2-0.55, so the default only rejects egregious
         mixes; don't raise it above ~0.3 without measuring on your audio.
 
-    Growth control
-    --------------
-    max_embeddings_per_enroll: at most this many segments are embedded and
-        stored per enroll/identify call (the highest-quality ones are kept).
-    max_embeddings_per_speaker: hard cap per speaker in the store; exceeding
-        entries are evicted lowest-composite-quality-first.
-    merge_unknowns_on_enroll: when enrolling a NAMED speaker, absorb existing
-        unknowns that match above ``merge_threshold``.
+    .. rubric:: Growth control
 
-    Runtime
-    -------
-    device: torch device for the embedder ("cpu", "cuda", "mps").
-    model_source: HuggingFace/speechbrain source for the ECAPA model.
-    model_cache_dir: where model weights are cached. Defaults to
-        $IMPRONTA_CACHE_DIR or ~/.cache/impronta.
-    sample_rate: internal processing sample rate (ECAPA expects 16 kHz).
+    ``max_embeddings_per_enroll``
+        At most this many segments are embedded and stored per
+        enroll/identify call (the highest-quality ones are kept).
+    ``max_embeddings_per_speaker``
+        Hard cap per speaker in the store; exceeding entries are evicted
+        lowest-composite-quality-first.
+    ``merge_unknowns_on_enroll``
+        When enrolling a NAMED speaker, absorb existing unknowns that match
+        above ``merge_threshold``.
+
+    .. rubric:: Runtime
+
+    ``device``
+        Torch device for the embedder ("cpu", "cuda", "mps").
+    ``model_source``
+        HuggingFace/speechbrain source for the ECAPA model.
+    ``model_cache_dir``
+        Where model weights are cached. Defaults to $IMPRONTA_CACHE_DIR or
+        ~/.cache/impronta.
+    ``sample_rate``
+        Internal processing sample rate (ECAPA expects 16 kHz).
     """
 
     # segmentation

@@ -54,7 +54,9 @@ print(format_transcript(new_scribe_response, result))
 app.store.save("./speaker_db")
 ```
 
-See [`examples/`](examples/) for runnable scripts covering every workflow.
+See [`examples/`](examples/) for runnable scripts covering every workflow, and the full documentation (guides, configuration reference, API docs) under [`docs/`](docs/) — build it with `uv run --group docs sphinx-build -b html docs docs/_build/html`.
+
+Every result carries its evidence: pass an opaque `audio_id` into `add_speaker`/`identify` and results expose the exact segments used (`result.segments`, `match.segments`) plus the single best one (`.ideal_segment`), so you can pull the source audio and listen to what a decision was based on.
 
 ## Unknown speakers: propose → commit → label
 
@@ -171,6 +173,7 @@ uv run pytest                  # hermetic default tier: no network, no torch imp
 uv run pytest -m integration   # real ECAPA (downloads the model)
 uv run pytest -m live          # real ElevenLabs API; needs ELEVENLABS_API_KEY + IMPRONTA_LIVE_AUDIO
 uv run ruff check src tests && uv run mypy src/impronta
+uv run --group docs sphinx-build -b html docs docs/_build/html   # build the docs
 ```
 
 ## License
