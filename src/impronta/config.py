@@ -89,6 +89,19 @@ class ImprontaConfig:
         toward the wrong voice and errors compound. (The score bar for
         reinforcement itself is ``merge_threshold``, same as all other
         profile-mutating decisions.)
+    reinforce_threshold: minimum mean similarity for reinforcement to fire
+        AND per-segment bar for harvesting. Deliberately stricter than
+        ``merge_threshold``: randomized replay of production data showed
+        wrong-voice absorptions cluster at 0.60-0.70 similarity (median
+        0.65), while only 14% reached 0.70 — this bar removes ~86% of
+        poisoning at modest cost to clean harvests.
+    reinforce_min_profile_entries: profiles with fewer stored embeddings
+        than this never self-train. A 1-2 entry profile enrolled from a
+        noisy clip is a channel fingerprint, not a voiceprint — other
+        voices clear the reinforcement bar against it and the error
+        compounds. Measured in randomized replay of production data:
+        without this gate 34% of reinforcement commits harvested the WRONG
+        person's voice.
     enroll_outlier_margin: enrollment segments whose centroid-similarity
         falls this far below the batch MEDIAN are dropped — diarization
         sometimes attributes another person's words to the labeled speaker,
@@ -154,6 +167,8 @@ class ImprontaConfig:
     search_k: int = 10
     enroll_outlier_margin: float = 0.3
     reinforce_margin: float = 0.12
+    reinforce_min_profile_entries: int = 3
+    reinforce_threshold: float = 0.7
     # unknown proposal gating
     min_proposal_segments: int = 3
     min_proposal_tier: str = "medium"

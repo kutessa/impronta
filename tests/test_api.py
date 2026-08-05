@@ -293,7 +293,10 @@ def reinforce_setup(voices) -> Impronta:
     voices = dict(voices)
     voices[SAME_VOICE_NEW_TAKE] = blend(basis(0), basis(5), 0.8)
     app = make_app(voices)
-    r, a = solo_recording(ALICE, tid="t-enroll-alice")
+    # 3 spans -> 3 entries: a MATURE profile (reinforce_min_profile_entries)
+    r, a = solo_recording(
+        ALICE, spans=((0.0, 5.0), (6.0, 11.0), (12.0, 17.0)), tid="t-enroll-alice"
+    )
     app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
     return app
 
@@ -328,9 +331,11 @@ def test_reinforce_happy_path(voices):
 
 def test_reinforce_skips_weak_match(voices):
     voices = dict(voices)
-    voices[660.0] = blend(basis(0), basis(5), 0.55)  # matches (>=0.5), weak (<0.6)
+    voices[660.0] = blend(basis(0), basis(5), 0.55)  # matches (>=0.4), weak (<0.6)
     app = make_app(voices)
-    r, a = solo_recording(ALICE, tid="t-enroll")
+    r, a = solo_recording(
+        ALICE, spans=((0.0, 5.0), (6.0, 11.0), (12.0, 17.0)), tid="t-enroll"
+    )
     app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
     resp, audio = solo_recording(660.0, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-weak")
     assert app.identify(resp, wav_bytes(audio)).speakers["speaker_0"].display_name == "Alice"
@@ -339,12 +344,12 @@ def test_reinforce_skips_weak_match(voices):
 
 def test_reinforce_skips_contested_match(voices):
     voices = dict(voices)
-    # voice close to BOTH alice (0.75) and bob (0.65): margin 0.10 < 0.15
+    # voice close to BOTH alice (0.75) and bob (0.65): margin 0.10 < 0.12
     v = 0.75 * basis(0) + 0.65 * basis(1)
     voices[660.0] = (v / np.linalg.norm(v)).astype(np.float32)
     app = make_app(voices)
-    ra, aa = solo_recording(ALICE, tid="t-a")
-    rb, ab = solo_recording(BOB, tid="t-b")
+    ra, aa = solo_recording(ALICE, spans=((0.0, 5.0), (6.0, 11.0), (12.0, 17.0)), tid="t-a")
+    rb, ab = solo_recording(BOB, spans=((0.0, 5.0), (6.0, 11.0), (12.0, 17.0)), tid="t-b")
     app.add_speaker(ra, wav_bytes(aa), "speaker_0", "Alice")
     app.add_speaker(rb, wav_bytes(ab), "speaker_0", "Bob")
     resp, audio = solo_recording(660.0, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-contested")
@@ -381,6 +386,21 @@ def test_reinforce_uses_current_display_name(voices):
         if e.source == "reinforce"
     ]
     assert reinforced and all(e.display_name == "Alice Liddell" for e in reinforced)
+
+
+def test_reinforce_skips_immature_profile(voices):
+    """A 1-entry profile must never self-train (poisoning anchor)."""
+    voices = dict(voices)
+    voices[SAME_VOICE_NEW_TAKE] = blend(basis(0), basis(5), 0.8)
+    app = make_app(voices)
+    r, a = solo_recording(ALICE, tid="t-thin")  # single span -> 1 entry
+    app.add_speaker(r, wav_bytes(a), "speaker_0", "Alice")
+    assert len(app.store.get_speaker_entries("default", "alice")) < 3
+    resp, audio = solo_recording(
+        SAME_VOICE_NEW_TAKE, spans=((0.0, 5.0), (6.0, 11.0)), tid="t-take"
+    )
+    assert app.identify(resp, wav_bytes(audio)).speakers["speaker_0"].display_name == "Alice"
+    assert app.propose_reinforcements(resp, wav_bytes(audio)) == []
 
 
 def test_reinforce_never_proposes_strangers(voices):

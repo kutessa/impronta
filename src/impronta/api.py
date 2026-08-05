@@ -455,7 +455,7 @@ class Impronta:
             outcome.winner_key == UNKNOWN_BUCKET
             or outcome.winner_namespace is None
             or outcome.mean_similarity is None
-            or outcome.mean_similarity < cfg.merge_threshold
+            or outcome.mean_similarity < cfg.reinforce_threshold
         ):
             return None
         rival_sims = [
@@ -471,11 +471,13 @@ class Impronta:
         stored = self.store.get_speaker_entries(
             outcome.winner_namespace, outcome.winner_key
         )
-        if not stored:
+        if len(stored) < cfg.reinforce_min_profile_entries:
+            # too thin to be a trustworthy anchor — a 1-2 entry profile is a
+            # channel fingerprint that other voices can clear the bar against
             return None
         profile = np.stack([e.embedding for e in stored])
         best_vs_profile = (prepared.embeddings @ profile.T).max(axis=1)
-        keep = (best_vs_profile >= cfg.merge_threshold) & (
+        keep = (best_vs_profile >= cfg.reinforce_threshold) & (
             best_vs_profile < self.NOVELTY_CEILING
         )
         if not keep.any():

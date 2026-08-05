@@ -229,3 +229,4 @@ dataset/ls_media/
 dataset/ls_tasks.json
 tuning/study.db
 tuning/reports/
+dataset/*

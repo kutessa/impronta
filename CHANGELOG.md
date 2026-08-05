@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Vote: unmatched segments now weigh `duration x similarity_threshold` into
+  the unknown bucket (was `duration x 1.0`, giving "not sure" ~2x the weight
+  of a genuine match — measured cause of most missed identifications).
+- Reinforcement hardening from 40-seed randomized paired replay of
+  production data: new `reinforce_threshold` (0.7, stricter than
+  merge_threshold — wrong-voice absorptions cluster at 0.60-0.70) and
+  `reinforce_min_profile_entries` (3 — thin profiles never self-train).
+  At the old 0.6 bar, 11% of reinforcement commits harvested the wrong
+  person's voice.
+
 - Data-driven default recalibration against 145 annotated production
   recordings (grid + Optuna + chronological replay; wrong-name ≤ 2%
   objective): `similarity_threshold` 0.5 → 0.40, `min_segment_confidence`
